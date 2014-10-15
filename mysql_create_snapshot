@@ -34,13 +34,18 @@ R42::Log::set_logsyslog("true");
 R42::Log::set_logdebug("true");
 
 # --------------------------------------------------------------------------- #
-# Definitions des fonctions
+# Parametrage par defaut
 
+my %opt;
 my $vg='data';
-my $lv='s001.mysql.zaas.fr-srv-mysql';
+my $lv;
 my $block='xvdc1';
-my $server='s001.mysql.zaas.fr';
+my $server;
+my $conffile="";
 my $dbh;
+
+# --------------------------------------------------------------------------- #
+# Definitions des fonctions
 
 sub usage() {
         print "mysql_create_snapshot -s <mysql server> -v <vg> -l <lv> -b <blockdevice>
@@ -49,8 +54,9 @@ sub usage() {
  -q : enable quiet mode
  -s <mysql server/domU> : mysql server for which we want to make a snapshot
  -l <lv> : logical volume containing the mysql data
- -v <vg> : volume group containing the lv
- -b <block> : block device inside domU
+ -v <vg> : volume group containing the lv (default : $vg)
+ -b <block> : block device inside domU (default : $block)
+ -c <conf> : specify a custom mysql config file
 
  Example : mysql_create_snapshot -s mysql001.hosting.com -v data -l mysql001.hosting.com-data -b xvdc1
 "
@@ -64,21 +70,21 @@ sub cb_trap {
 sub check_if_vg_exists($) {
 	R42::Log::log_message('debug','check_if_vg_exists');
 	my ($vg) = @_;
-	system("vgs $vg &> /dev/null");
+	system("vgs $vg");
 	return $?;
 }
 
 sub check_if_lv_exists($$) {
 	R42::Log::log_message('debug','check_if_lv_exists');
 	my ($vg,$lv) = @_;
-	system("lvs /dev/$vg/$lv &> /dev/null");
+	system("lvs /dev/$vg/$lv");
 	return $?;
 }
 
 sub check_if_lv_snapshot_exists($$) {
 	R42::Log::log_message('debug','check_if_lv_snapshot_exists');
 	my ($vg,$lv) = @_;
-	system("lvs /dev/$vg/$lv-backup &> /dev/null");
+	system("lvs /dev/$vg/$lv-backup");
 	return $?;
 }
 
@@ -168,6 +174,44 @@ sub block_attach($$$$) {
 	return $?;
 }
 
+# --------------------------------------------------------------------------- #
+# Gestion de la ligne de commande
+
+getopts("hdqv:l:s:c:b:",\%opt);
+
+if($opt{h}) {
+        usage();
+        exit $R42::exit_ok;
+}
+
+Bourso::Log::set_logdebug(1) if($opt{d});
+Bourso::Log::set_logquiet(1) if($opt{q});
+
+if(!$opt{l}) {
+	R42::Log::log_message('error',"Option -l is mandatory");
+	usage();
+	exit $R42::exit_error;
+}
+$lv=$opt{l};
+
+if(!$opt{s}) {
+	R42::Log::log_message('error',"Option -s is mandatory");
+	usage();
+	exit $R42::exit_error;
+}
+$server=$opt{s};
+
+$block=$opt{b} if($opt{b});
+$vg=$opt{v} if($opt{v});
+
+if($opt{c}) {
+	if ( ! -f $opt{c}) {
+		R42::Log::log_message('error',"Configuration file specified with -c doesn't exist");
+		exit $R42::exit_error;
+	}
+	$conffile=$opt{c};
+}
+
 if(check_if_vg_exists($vg) ne 0) {
 	R42::Log::log_message('error',"Specified VG $vg doesn't exist");
 	exit $R42::exit_error;
@@ -200,6 +244,16 @@ if(take_snapshot($vg,$lv) ne 0) {
 }
 unlock($dbh);
 db_disconnect($dbh);
+
+my $timeout=10;
+while(check_if_lv_snapshot_exists($vg,$lv) ne 0 && $timeout ne 0) {
+	sleep 1;
+	$timeout--;
+}
+if($timeout eq 0) {
+	R42::Log::log_message('error',"Unable to create the snapshot");
+	exit $R42::exit_error;
+}
 
 if(block_attach($server,$vg,$lv,$block) ne 0) {
 	R42::Log::log_message('error',"Unable to attach block device into domU");
