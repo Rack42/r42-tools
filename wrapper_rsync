@@ -1,0 +1,1051 @@
+#!/bin/bash
+# --------------------------------------------------------------------------- #
+#
+# @scriptname wrapper_rsync
+# @shortdescription Wrapper rsync 
+# @longdescription Script facilitant l'utilisation de rsync et la remontée
+# @longdescription d'erreur
+# @author Denis Sacchet <denis@rack42.fr>
+# @author Loic Barreau <loic@rack42.fr>
+# @category system
+# @version 1.8
+# @link http://intranet/exploitwiki/
+# @safetorunatanytime no (cela depend de ce qu'on synchronise)
+#
+# Changelog :
+#
+#   20 Sep 2012; Denis Sacchet <denis@rack42.fr>
+#   Ajout du signe = sur l'option --exclude-from
+#
+#   14 Sep 2012; Denis Sacchet <denis@rack42.fr>
+#   Ajout d'un filtre d'affichage au format JSON
+#
+#   5 Feb 2012; Denis Sacchet <denis@rack42.fr>
+#   Correction de l'utilisation de find lors des purges des logs pour eviter
+#   un message de warning
+#
+#   28 Jan 2012; Denis Sacchet <denis@rack42.fr>
+#   En mode reverse, on rajoute une option qui permet de choisir un serveur
+#   parmi la liste obtenue si la liste ne contient pas qu'un seul serveur.
+#   Si cette option n'est pas specifiee, et que la liste contient plusieurs
+#   serveurs, on sort en erreur comme avant
+#   Si le serveur local fait parti de la liste des serveurs a synchro, il s'en
+#   exclu automatiquement
+#
+#   23 Jan 2012; Olivier Hanesse <olivier@rack42.fr>
+#   BugFix
+#
+#   22 Jan 2012; Denis Sacchet <denis@rack42.fr>
+#   Possibilite de mettre plusieurs listes dans le fichier de configuration
+#   Du coup, on renomme la directive de list à lists
+#   Reecriture de l'algo de timeout et d'execution en parallele. Il n'y a plus
+#   de zombi possible
+#   Optimisation de la gestion des erreurs, suppression de tous les grep dans
+#   les fichiers de logs
+#
+#   21 Jan 2012; Denis Sacchet <denis@rack42.fr>
+#   Option pour afficher la progression
+#
+#   04 Jan 2012; Denis Sacchet <denis@rack42.fr>
+#   Implementation de l'option rsync-options et de la directive de configuration
+#   rsync_options pour pouvoir changer les options par defaut -avzO
+#
+#   16 Nov 2011; Denis Sacchet <denis@rack42.fr>
+#   La liste des serveurs peut être spécifié par le fichier $conf/servers comme avant
+#   ou bien via la directive de configuration 'liste' qui renvoit à un fichier liste
+#   dans le répertoire /etc/listes
+#   Suppression du code en rapport avec <%= this_platform %> and <%= other_platform %>
+#
+#   27 Sep 2011; Denis Sacchet <denis@rack42.fr>
+#   Ajout de la possibilite d'utiliser <%= this_platform %> and <%= other_platform %>
+#
+#   22 Jul 2011; Denis Sacchet <denis@rack42.fr>
+#   Rajout d'un filtre pour ne pas prendre en compte le code d'erreur 24
+#
+#   6 May 2011; Denis Sacchet <denis@rack42.fr>
+#   Bug dans la verification de la presence du socket du master channe
+#
+#   5 May 2011; Denis Sacchet <denis@rack42.fr>
+#   Verification de la presence du socket du master channel en cas de check negatif
+#   et effacement avant de relancer un process ssh
+#
+#   12 Mar 2011; Denis Sacchet <denis@rack42.fr>
+#   Bug sur le fichier de lock, rajout du nom de la conf dans le nom du fichier de lock
+#   pour pouvoir lancer plus d'une instance a la fois. Nettoyage correct dans trap + fin
+#
+#   10 Feb 2011; Denis Sacchet <denis@rack42.fr>
+#   Amelioration de la gestion du timeout (evite d'avoir le sous shell qui continue de tourner)
+#   Gestion d'un lock de concurrence
+#   Ajout de la date pour le fichier global.log permettant une rotation plus aisée
+#   Activation de la purge des logs
+#
+#   3 Feb 2011; Denis Sacchet <denis@rack42.fr>
+#   Option channel master pour ssh
+#
+#   2 Feb 2011; Denis Sacchet <denis@rack42.fr>
+#   Oubli du global dans le sed de conversion de la commande manual exclude
+#
+#   12 Jan 2011; Denis Sacchet <denis@rack42.fr>
+#   Ajout de la directive de configuration purgelog pour definir une eventuelle
+#   purge des logs bases sur une duree
+#
+#   23 Dec 2010; Loic Barreau <loic@rack42.fr>
+#   Correction d'un bug : $EXIT_STATUS=(0|1) de positionne en cas d'erreur sur la synchro, mais
+#   le script fait un exit ${RETURN_CODE}  (cadeau de noel)
+#
+#   25 Aug 2010; Denis Sacchet <denis@rack42.fr>
+#   Ajout d'une option pour afficher les derniers logs avec un filtrage
+#
+#   15 Avr 2010; Denis Sacchet <denis@rack42.fr>
+#   Correction d'un bug dans le test d'identite quand l'utilisateur n'existe pas du tout sur
+#   le serveur
+#   Remplacement des echo par des appels a log_message
+#
+#   14 Avr 2010; Denis Sacchet <denis@rack42.fr>
+#   Ajout des options :
+#    -F / --file : ne synchronise que le fichier en argument dans l'arborescence source
+#    -n / --no-exclude : ne prend pas en compte le fichier d'exclude (nécessite l'option -f)
+#    -x / --manual-excludes : liste d'exclude en plus de la configuration (chemin separe par :)"
+#
+#   16 Jan 2009; Denis Sacchet <denis@rack42.fr>
+#   Retour en arriere par rapport a la modif pour l'utilisateur dans le fichier
+#   de serveurs.
+#
+#   15 Jan 2009; Denis Sacchet <denis@rack42.fr>
+#   Possibilité de mettre un utilisateur dans le fichier server du
+#   répertoire de configuration, si pas d'utilisateur, on prend l'utilisateur
+#   remoteuser
+#   Ajout une option pour permettre de faire le --delete meme si deletion=no
+#   dans le fichier de configuration
+#   Completion du resume avec les nouvelles informations
+#   Renseignement de SCRIPT_NAME
+#
+#   02 Jan 2009; Denis Sacchet <denis@rack42.fr>
+#   Conversion vers le nouveau template
+#   Correction bug timeout
+#   Changement emplacement du fichier de conf (dans /etc/wrapper_rsync)
+#
+#   04 Dec 2008: Fabrice Kofler <denis@rack42.fr>
+#   Ajout de l'option -s|--sequentiel qui permet de faire une synchro
+#   apres l'autre sur tous les serveurs et non pas tout parallelise
+#
+#   28 Nov 2008: Fabrice Kofler <denis@rack42.fr>
+#   Ajout de l'option -r|--reverse qui permet de faire une synchro de la
+#   destination vers la source
+#
+#   17 Avr 2008; Denis Sacchet <denis@rack42.fr>
+#   Changement du répertoire de log de ~/var/log à ~/log
+#   Ajout d'une option pour permettre ou non de conserver les logs (dans un
+#   souci d'espace disque, notamment dans le cas d'un rsync regulier toutes
+#   les minutes)
+#
+#   01 Avr 2008; Denis Sacchet <denis@rack42.fr>
+#   Ajout d'une option dans le fichier de configuration pour effacer ou non
+#   les fichiers présents sur le serveur distant et pas localement
+#   Changement de l'emplacement par défaut des fichiers de configuration :
+#   /usr/local/etc/wrapper_rsync
+#
+#   26 Mar 2008; Denis Sacchet <denis@rack42.fr>
+#   Rajout de l'option O au rsync pour ne pas synchroniser les dates de modif
+#   sur les répertoires
+#   Correction d'un bug dans l'affichage des logs à la fin du traitement
+#
+
+#   25 Mar 2008; Denis Sacchet <denis@rack42.fr>
+#   Version initiale
+#
+# --------------------------------------------------------------------------- #
+
+# --------------------------------------------------------------------------- #
+# Initialisation
+
+. /usr/local/lib/r42lib.inc.sh
+SCRIPT_NAME=$(basename $0)
+set_logfile "${HOME}/logs/wrapper_rsync/global-$(date '+%Y%m%d').log"
+set_logsyslog "true"
+
+mkdir -p "${HOME}/run/wrapper_rsync" &> /dev/null
+if [ $? -ne 0 ]
+then
+	log_message error "Unable to create ~/run/wrapper_rsync directory to store process file"
+	exit ${EXIT_ERROR}
+fi
+
+# --------------------------------------------------------------------------- #
+# Include de vos librairies et autres
+
+# --------------------------------------------------------------------------- #
+# Parametrage par defaut
+
+RETURN_CODE=${EXIT_OK}
+
+# --------------------------------------------------------------------------- #
+# Definition des fonctions
+
+TEST=0
+CONF=
+SEQ=0
+REVERSE=0
+CHOOSE=nodefault
+FORCE=0
+DELETE=0
+FILE=nodefault
+LIST_SOURCE=none
+NOEXCLUDE=0
+MANUALEXCLUDES=nodefault
+DISPLAY_LOGS_MODE=
+SERVERSLISTFILE=
+OPTIONS=-avzO
+DISPLAY_PROGRESS=
+DISPLAY_MACHINES=
+TAG_FIN="= FINI ="
+TAG_OK="= OK ="
+TAG_NOK="= NOK ="
+ME="$(hostname -f)"
+
+function usage() {
+	echo "${SCRIPT_NAME} [ <OPTIONS> ]
+ -h / --help : affiche ce message et sort
+ -f / --force : ne pose pas de question
+ -d / --debug : active le mode debug
+ -q / --quiet : active le mode silencieux
+ -c / --conf : détermine la configuration à utiliser
+ -D / --delete : permet de faire un delete meme si deletion=no dans le fichier de configuration
+ -t / --test : realise une simulation
+ -r / --reverse : synchro de destination vers source
+ -C / --choose : choisit un serveur dans la liste si plusieurs serveurs (first|random|no:<n>)
+ -s / --sequentiel : lance une synchro apres l'autre et non en parallele
+ -F / --file : ne synchronise que le fichier en argument dans l'arborescence source
+ -n / --no-exclude : ne prend pas en compte le fichier d'exclude (nécessite l'option -f)
+ -x / --manual-excludes : liste d'exclude en plus de la configuration (chemin separe par :)
+ -L / --display-logs : affiche les logs de la configuration désignée dans le format en paramètre
+ -P / --display-progress : affiche la progression de la configuration désignée dans le format en paramètre
+ -M / --display-machines : affiche la liste des machines de destination
+ -O / --rsync-options : options a passer a la commande rsync (par defaut : $OPTIONS, peut etre specifie dans la conf rsync_options)"
+}
+
+function cb_trap() {
+	# Mettre ici ce qui faut pour faire le menage en cas de CTRL+C ...
+	if [ x"${LOCKFILE}" != "x" ]
+	then
+		rm -f "${LOCKFILE}"
+	fi
+	if [ ${timeout} -ne 0 ]
+	then
+		trap "" 14
+		clean_jobs 9
+		# On recupere le code de retour des rsyncs
+		for ((i=0;i<$((${#pids_list[*]}));i++))
+		do
+			wait ${pids_list[$i]}
+			rsync_return_code=$?
+			echo "Return code : ${rsync_return_code}" >> ${REPERTOIRE_LOGS}/${machines_list[$i]}.log
+			if [ ${rsync_return_code} -eq 0 ]
+			then
+				echo $TAG_OK >> ${REPERTOIRE_LOGS}/${machines_list[$i]}.log
+			else
+				echo $TAG_NOK >> ${REPERTOIRE_LOGS}/${machines_list[$i]}.log
+			fi
+			echo $TAG_FIN >> ${REPERTOIRE_LOGS}/${machines_list[$i]}.log
+		done
+	fi
+	exit ${EXIT_ALERT}
+}
+
+function filter_raw {
+	while read line;
+	do
+		echo $line
+	done
+}
+
+function filter_html {
+	while read line
+	do
+		start_of_line=${line:0:2}
+		if [ "x${start_of_line}" != 'x==' -a "x${start_of_line}" != 'x<<' ]
+		then
+			echo $line
+			continue;
+		fi
+		if [ "x$(echo $line | sed "s@^<< .* ==@1@")" = "x1" ]
+		then
+			SERVER=$(echo $line | sed 's@<< \(.*\) .\(.*\). ==@\1@')
+			STATUS=$(echo $line | sed 's@<< \(.*\) .\(.*\). ==@\2@')
+			echo "<h2 class='$STATUS'>$SERVER</h2>"
+		elif [ "x$(echo $line | sed "s@^== .* >>@1@")" = "x1" ]
+		then
+			echo -n
+		elif [ "x$(echo $line | sed "s@^<<<< LOG ====@1@")" = "x1" ]
+		then
+			echo "<div>"
+			echo "<h3 class='toggle'>Log</h3>"
+			echo "<pre class='log'>"
+		elif [ "x$(echo $line | sed "s@^<<<< ERR ====@1@")" = "x1" ]
+		then
+			echo "<div>"
+			echo "<h3 class='toggle'>Err</h3>"
+			echo "<pre class='err'>"
+		elif [ "x$(echo $line | sed "s@^==== .*@1@")" = "x1" ]
+		then
+			echo "</pre>"
+			echo "</div>"
+		fi
+	done
+}
+
+function filter_json {
+	first_server=1
+	echo -n '{ '
+	while read line
+	do
+		start_of_line=${line:0:2}
+		if [ "x${start_of_line}" != 'x==' -a "x${start_of_line}" != 'x<<' ]
+		then
+			echo $line | sed 's@"@ @g'
+			continue;
+		fi
+		if [ "x$(echo $line | sed "s@^<< .* ==@1@")" = "x1" ]
+		then
+			SERVER=$(echo $line | sed 's@<< \(.*\) .\(.*\). ==@\1@')
+			STATUS=$(echo $line | sed 's@<< \(.*\) .\(.*\). ==@\2@')
+#			echo "<h2 class='$STATUS'>$SERVER</h2>"
+			if [ $first_server -ne 1 ]
+			then
+				echo -n ',{';
+			else
+				echo -n '{';
+				first_server=0
+			fi
+			echo -n '"server":"'$SERVER'","status":"'$STATUS'",'
+		elif [ "x$(echo $line | sed "s@^== .* >>@1@")" = "x1" ]
+		then
+			echo -n
+		elif [ "x$(echo $line | sed "s@^<<<< LOG ====@1@")" = "x1" ]
+		then
+#			echo "<div>"
+#			echo "<h3 class='toggle'>Log</h3>"
+#			echo "<pre class='log'>"
+			echo -n '"log":"'
+		elif [ "x$(echo $line | sed "s@^<<<< ERR ====@1@")" = "x1" ]
+		then
+#			echo "<div>"
+#			echo "<h3 class='toggle'>Err</h3>"
+#			echo "<pre class='err'>"
+			echo -n '"err":"'
+		elif [ "x$(echo $line | sed "s@^==== .*@1@")" = "x1" ]
+		then
+#			echo "</pre>"
+#			echo "</div>"
+			echo -n '"}'
+		fi
+	done
+	echo '}'
+}
+
+function clean_jobs {
+	if [ ! -z "$1" ]
+	then
+		SIGNAL="-$1"
+	else
+		SIGNAL=""
+	fi
+
+	jobs -pr | while read PID
+	do
+		kill $SIGNAL $PID
+	done
+}
+
+# --------------------------------------------------------------------------- #
+# Gestion de la ligne de commande
+
+TEMP=`getopt -o hdDqc:rtfsF:nx:L:O:PC:M -l help,debug,delete,force,quiet,conf:,test,sequentiel,reverse,file:,no-exclude,manual-excludes,display-logs:,rsync-options:,display_progress,choose:,display-machines -n '' -- "${@}"`
+
+if [ ${?} != 0 ] ; then log_message error "Probleme lors du traitement de la ligne de commande" ; exit 1 ; fi
+
+eval set -- "${TEMP}"
+
+while true ; do
+	case "${1}" in
+		-d|--debug)
+			set_logdebug "true"
+			shift 1;
+			;;
+		-q|--quiet)
+			set_logquiet "true"
+			shift 1;
+			;;
+		-f|--force)
+			FORCE=1
+			shift 1;
+			;;
+		-h|--help)
+			usage
+			exit ${EXIT_OK}
+			;;
+		-s|--sequentiel)
+			SEQ=1
+			shift 1
+			;;
+		-r|--reverse)
+			REVERSE=1
+			shift 1
+			;;
+		-C|--choose)
+			CHOOSE=${2}
+			shift 2
+			;;
+		-t|--test)
+			TEST=1
+			shift 1
+			;;
+		-c|--conf)
+			CONF=${2}
+			shift 2
+			;;
+		-D|--delete)
+			DELETE=1
+			shift 1
+			;;
+		-n|--no-exclude)
+			NOEXCLUDE=1
+			shift 1
+			;;
+		-x|--manual-excludes)
+			MANUALEXCLUDES=${2}
+			shift 2
+			;;
+		-F|--file)
+			FILE=${2}
+			shift 2
+			;;
+		-L|--display-logs)
+			DISPLAY_LOGS_MODE=${2}
+			shift 2
+			;;
+		-O|--rsync-options)
+			OPTIONS=${2}
+			shift 2
+			;;
+		-P|--display-progress)
+			DISPLAY_PROGRESS=yes
+			shift 1
+			;;
+		-M|--display-machines)
+			DISPLAY_MACHINES=yes
+			shift 1
+			;;
+		--)
+			shift;
+			break;
+			;;
+		*)
+			log_message error "Error : ${1} est un paramètre non valide" 1>&2
+			usage 1>&2
+			exit ${EXIT_ERROR}
+			;;
+	esac;
+done;
+
+# --------------------------------------------------------------------------- #
+# Verification des paramatres (syntaxe, parametres obligatoires, etc ...)
+
+if [ x"${CONF}" = "x" ]
+then
+	log_message error "Error : c / conf est un paramètre obligatoire"
+	usage 1>&2
+	exit ${EXIT_ERROR}
+fi
+
+STATUSDIR="${HOME}/run/wrapper_rsync"
+mkdir -p "${STATUSDIR}"
+if [ $? -ne 0 ]
+then
+	log_message error "Unable to create ${STATUSDIR} directory to store process file"
+	exit ${EXIT_ERROR}
+fi
+LOCKFILE="${STATUSDIR}/lock.${CONF}"
+
+if [ -f "${LOCKFILE}" ]
+then
+	PID=$(cat "${LOCKFILE}")
+	verify_pid $(cat "${LOCKFILE}") wrapper_rsync
+	case $? in
+		$PID_USEDBYANOTHER)
+			log_message debug "A status file is present, but the process associated with the PID $PID seems to not correspond to an wrapper_rsync instance, delete ..."
+			rm "${LOCKFILE}"
+			;;
+		$PID_RUNNING)
+			log_message error "A status file is present, and the associated process with PID $PID seems to still running, exit ..."
+			exit ${EXIT_WARNING}
+			;;
+		$PID_NOTRUNNING)
+			log_message debug "A status file is present, but the process associated with the PID $PID seems to not execute anymore, delete ..."
+			rm "${LOCKFILE}"
+			;;
+	esac
+fi
+
+echo $$ >  "${LOCKFILE}"
+
+if [ ${NOEXCLUDE} -eq 1 -a x"${FILE}" = "xnodefault" ]
+then
+	log_message error "Error : n / no-exclude doit etre utilisee avec F / file"
+	usage 1>&2
+	exit ${EXIT_ERROR}
+fi
+
+echo "${FILE}" | grep "\.\." &> /dev/null
+
+if [ $? -eq 0 ]
+then
+	log_message error "Error : F / file ne peut pas contenir .."
+	usage 1>&2
+	exit ${EXIT_ERROR}
+fi
+
+if [ x"${FILE}" = "xnodefault" ]
+then
+	FILE=""
+else
+	if [ "x${FILE:0:1}" = "x/" ]
+	then
+		FILE=${FILE:1}
+	fi
+fi
+
+# --------------------------------------------------------------------------- #
+# Script en lui meme
+
+trap "{ cb_trap; }" 2 9 15
+
+# --------------------------------------------------------------------------- #
+# Vérification des paramètres et de la configuration
+
+conf="/etc/wrapper_rsync/$CONF"
+
+if [ ! -d "${conf}" ]
+then
+	log_message error "Error : configuration directory '${conf}' doesn't exist" 
+	exit 1
+fi
+
+if [ ! -f "${conf}/conf" ]
+then
+	log_message error "Error : configuration directory must contain a 'conf' file" 
+	exit 1
+fi
+
+if [ ! -f "${conf}/exclude" ]
+then
+	log_message error "Error : configuration directory must contain an 'exclude' file" 
+	exit 1
+fi
+
+if [ -f "${conf}/servers" ]
+then
+	LIST_SOURCE=servers
+	read -ra MACHINES_DEST <<< $(cat "${conf}/servers" | grep -v $ME)
+fi
+
+rsync_options=none
+source "${conf}"/conf
+
+if [ x"${localbase}" = "x" ]
+then
+	log_message error "Error : the configuration file must contain 'localbase' directive" 
+	exit 1
+fi
+
+if [ x"${localuser}" = "x" ]
+then
+	log_message error "Error : the configuration file must contain 'localuser' directive" 
+	exit 1
+fi
+
+if [ x"${remotebase}" = "x" ]
+then
+	log_message error "Error : the configuration file must contain 'remotebase' directive" 
+	exit 1
+fi
+
+if [ x"${remoteuser}" = "x" ]
+then
+	log_message error "Error : the configuration file must contain 'remoteuser' directive" 
+	exit 1
+fi
+
+if [ x"${remoteshell}" = "x" ]
+then
+	log_message error "Error : the configuration file must contain 'remoteshell' directive" 
+	exit 1
+fi
+
+if [ x"${timeout}" = "x" ]
+then
+	log_message error "Error : the configuration file must contain 'timeout' directive" 
+	exit 1
+fi
+
+if [ x"${deletion}" = "x" ]
+then
+	log_message error "Error : the configuration file must contain 'deletion' directive" 
+	exit 1
+fi
+
+if [ x"${keeplog}" = "x" ]
+then
+	log_message error "Error : the configuration file must contain 'keeplog' directive" 
+	exit 1
+fi
+
+if [ "x${rsync_options}" = "x" ]
+then
+	log_message error "Error : the configuration file contains an 'rsync_options' directive, but it is empty"
+	exit 1
+fi
+
+if [ "x${rsync_options}" != "xnone" ]
+then
+	
+	OPTIONS=$rsync_options
+fi
+
+
+if [ x"${usemasterchannel}" = "xyes" ]
+then
+	if [[ ! "x$(${remoteshell} -v 2>&1 | head -n 1)" =~ ^xOpenSSH.*$ ]]
+	then
+		log_message error "Error : remoteshell '${remoteshell}' is not compatible with usemasterchannel option"
+		exit 1
+	fi
+	remoteshell="${remoteshell} -oControlMaster=auto -o=ControlPath=\"~/.ssh/master-%r@%h:%p\""
+fi
+
+if [ x"${reverse}" != "x" ]
+then
+	if [[ ! "${reverse}" = "yes" && ! "${reverse}" = "no" ]]
+	then
+		log_message error "Error : 'reverse' configuration directive must be 'yes' or 'no'" 
+		exit 1
+	fi
+	if [ "${reverse}" = "yes" ]
+	then
+		REVERSE=1;
+	fi
+fi
+
+if [ x"${purgelog}" = "x" ]
+then
+	log_message error "Error : the configuration file must contain 'purgelog' directive" 
+	exit 1
+else
+	if [[ ! "${purgelog}" =~ ^[[:digit:]]+$ && ! "${purgelog}" = "no" ]]
+	then
+		log_message error "Error : 'purgelog' configuration directive must be a numeric value or 'no'" 
+		exit 1
+	fi
+fi
+
+if [ x"${lists}" != "x" ]
+then
+	if [ "${LIST_SOURCE}" != 'none' ]
+	then
+		log_message error "Error : configuration directive 'lists' and existence of ${conf}/servers are incompatible"
+		exit 1
+	fi
+	LIST_SOURCE=conf
+
+	SERVERSLISTFILES=
+	for list in ${lists}
+	do
+		if [ ! -f "/etc/listes/${list}" ]
+		then
+			log_message error "Error : File '/etc/listes/${list}' doesn't exist, please verify 'lists' configuration directive"
+		fi
+		SERVERSLISTFILES="${SERVERSLISTFILES} \"/etc/listes/${list}\""
+	done
+	read -ra MACHINES_DEST <<< $(eval $( echo cat $SERVERSLISTFILES) | grep -v $ME)
+fi
+
+if [ "$LIST_SOURCE" = "none" ]
+then
+	log_message error "Error : you must create ${conf}/servers or specify directive 'lists' in ${conf}/conf"
+	exit 1
+fi
+
+NB_MACHINES_DEST=${#MACHINES_DEST[*]}
+
+if [ $NB_MACHINES_DEST -eq 0 ]
+then
+	log_message info "Nothing to do, no active server"
+	exit 0
+fi
+
+if [ $REVERSE -eq 1 -a $NB_MACHINES_DEST -gt 1 -a "$CHOOSE" = "nodefault" ]
+then
+	log_message error "Error : in reverse mode, you must have only one server in servers list or specifiy -C / --choose option"
+	usage
+	exit 1
+fi
+
+if [ $REVERSE -eq 1 -a $NB_MACHINES_DEST -gt 1 -a "$CHOOSE" != "nodefault" ]
+then
+	ok=0
+	if [ "$CHOOSE" = "first" ]
+	then
+		line=0
+		ok=1
+	fi
+	if [ "$CHOOSE" = random ]
+	then
+		line=$(($RANDOM%$NB_MACHINES_DEST))
+		ok=1
+	fi
+	if [[ $CHOOSE =~ ^no:[0-9]+$ ]]
+	then
+		IFS=: read null line <<< "$CHOOSE"
+		line=$((($line-1)%$NB_MACHINES_DEST))
+		ok=1
+	fi
+	if [ $ok -ne 1 ]
+	then
+		log_message error "Error : the option -C / --choose can only have three value : first / random / no:<n>"
+		usage
+		exit 1
+	fi
+	NB_MACHINES_DEST=1
+	MACHINE_DEST=${MACHINES_DEST[$line]}
+	unset MACHINES_DEST
+	declare -a MACHINES_DEST
+	MACHINES_DEST[0]=$MACHINE_DEST
+	unset MACHINE_DEST
+fi
+
+# --------------------------------------------------------------------------- #
+# Affiche des logs et sortie si -L / --display-logs a été passé en option
+
+if [ ! -z "${DISPLAY_MACHINES}" ]
+then
+	echo ${MACHINES_DEST[@]}
+	exit ${EXIT_OK}
+fi
+
+if [ "x$(id -u ${localuser} 2> /dev/null)" != "x$(id -u)" ]
+then
+	log_message error "Error : ce script doit être lancé avec l'utilisateur '${localuser}'"
+	exit 1
+fi
+
+if [ ! -z "${DISPLAY_PROGRESS}" ]
+then
+	BASE_DIR=$(eval echo ~${localuser}/logs/wrapper_rsync/${CONF})
+	LOG_DIR=$(ls -tr ${BASE_DIR} | tail -n 1)
+	NB_TOTAL=${NB_MACHINES_DEST}
+	NB_FINI=`grep "$TAG_FIN" ${BASE_DIR}/${LOG_DIR}/*.log | wc -l`
+	log_message info "$NB_FINI/$NB_TOTAL"
+	rm "${LOCKFILE}"
+	exit ${EXIT_OK}
+fi
+
+if [ ! -z "${DISPLAY_LOGS_MODE}" ]
+then
+
+	BASE_DIR=$(eval echo ~${localuser}/logs/wrapper_rsync/${CONF})
+	LOG_DIR=$(ls -tr ${BASE_DIR} | tail -n 1)
+
+	(
+		for SERVER in $(ls ${BASE_DIR}/${LOG_DIR} | sed 's@\.[^\.]\+$@@' | sort | uniq)
+		do
+			tail -n 2 "${BASE_DIR}/${LOG_DIR}/${SERVER}.log" | grep "= OK =" &> /dev/null
+			if [ $? -eq 0 ]
+			then
+				STATUS=OK
+			else
+				STATUS=NOK
+			fi
+			echo "<< ${SERVER} (${STATUS}) =="
+			echo "<<<< LOG ===="
+			cat "${BASE_DIR}/${LOG_DIR}/${SERVER}.log"
+			echo "==== LOG >>>>"
+			if [ $(cat "${BASE_DIR}/${LOG_DIR}/${SERVER}.err" 2> /dev/null | wc -l) -ne 0 ]
+			then
+				echo "<<<< ERR ===="
+				cat "${BASE_DIR}/${LOG_DIR}/${SERVER}.err"
+				echo "==== ERR >>>>"
+			fi
+			echo "== ${SERVER} >>"
+		done
+	) | filter_${DISPLAY_LOGS_MODE}
+	rm "${LOCKFILE}"
+	exit ${EXIT_OK}
+fi
+
+# --------------------------------------------------------------------------- #
+# Réalisation du rsync
+
+if [ "x${purgelog}" != "xno" ]
+then
+	if [ -d "${HOME}/logs/wrapper_rsync/${CONF}/" ]
+	then
+		log_message debug "Delete log dirs older than ${purgelog} days in ${HOME}/logs/wrapper_rsync/${CONF}/"
+		find "${HOME}/logs/wrapper_rsync/${CONF}/" -depth -mindepth 1 -maxdepth 1 -mtime +${purgelog} -type d -exec rm -rf "{}" \;
+	fi
+fi
+
+REPERTOIRE_LOGS="${HOME}/logs/wrapper_rsync/${CONF}/$(date '+%Y-%m-%d-%H:%M:%S')"
+mkdir -p "${REPERTOIRE_LOGS}"
+log_message debug "Repertoire de logs : ${REPERTOIRE_LOGS}"
+
+if [ ${TEST} -eq 1 ]
+then
+	log_message info "La synchronisation n'aura pas vraiment lieu, ce n'est qu'un test"
+	TEST_ARG="--dry-run"
+fi
+
+if [ "x$deletion" = "xyes" -o "x$DELETE" = "x1" ]
+then
+	log_message info "Attention ! Suppression des fichiers non present sur le serveur source"
+	DELETION_ARG="--delete"
+fi
+
+if [ $NOEXCLUDE -eq 1 ]
+then
+	EXCLUDE_ARG=""
+else
+	EXCLUDE_ARG="--exclude-from=${conf}/exclude"
+	if [ x"$MANUALEXCLUDES" != "xnodefault" ]
+	then
+		EXCLUDE_ARG="$EXCLUDE_ARG $(echo $MANUALEXCLUDES | sed "s@:@' --exclude='@g" | sed "s@^\(.*\)\$@--exclude='\1'@g")"
+	fi
+fi
+
+log_message info "La synchronisation suivante est sur le point d'etre effectuee :"
+log_message info " * Utilisateur local : ${localuser}"
+log_message info " * Utilisateur distant par defaut : ${remoteuser}"
+if [ ${REVERSE} -eq 1 ]
+then
+	log_message info " * Source : _remote_:${remotebase}"
+	log_message info " * Destination : ${localbase}"
+else
+	log_message info " * Source : ${localbase}"
+	log_message info " * Destination : _remote_:${remotebase}"
+fi
+if [ "x$FILE" != "x" ]
+then
+	log_message info " * Synchronisation du fichier : ${FILE}"
+fi
+if [ ${NOEXCLUDE} -eq 1 ]
+then
+	log_message info " * !!! Tous les excludes sont desactives !!!"
+fi
+if [ "x$deletion" = "xyes" -o "x$DELETE" = "x1" ]
+then
+	log_message info " * !!! Mode suppression active !!!"
+fi
+if [ ${REVERSE} -eq 1 ]
+then
+	log_message info " * Mode reverse actif"
+fi
+if [ ${TEST} -eq 1 ]
+then
+	log_message info " * Mode test actif"
+fi
+log_message info " Liste des serveurs :"
+for((i=0;i<${#MACHINES_DEST[*]};i++));do log_message info "   - ${MACHINES_DEST[$i]}"; done;
+
+if [ ${FORCE} -ne 1 ]
+then
+	RESULT=x
+	while [ "${RESULT}" != "oui" -a "${RESULT}" != "non" ]
+	do
+		read -p "Etes vous sur de vouloir debuter la synchronisation : oui / non ? " RESULT
+	done
+	if [ "${RESULT}" != "oui" ]
+	then
+		exit 0
+	fi
+fi
+
+##
+# Fait en parallele le rsync pour toutes les machines
+# Logue les messages + erreurs 
+##
+
+if [ "x$FILE" != "x" ]
+then
+	if [ "x${remotebase: -1}" = "x/" -a "x${remorebase}" != "x/" ]
+	then
+		remotebase=${remotebase:0:$((${#remotebase}-1))}/$FILE
+	fi
+	if [ "x${localbase: -1}" = "x/" -a "x${remorebase}" != "x/" ]
+	then
+		localbase=${localbase:0:$((${#localbase}-1))}/$FILE
+	fi
+fi
+
+i=0
+for((j=0;j<${#MACHINES_DEST[*]};j++))
+do
+	MACHINE_DEST=${MACHINES_DEST[$j]}
+	log_message info "Demarrage synchro $MACHINE_DEST"
+
+	# Check du channel master et ouverture si besoin
+	if [ "${usemasterchannel}" = "yes" ]
+	then
+		log_message debug "Verification du channel ssh"
+		$remoteshell -O check $remoteuser@$MACHINE_DEST &> /dev/null
+		if [ $? -ne 0 ]
+		then
+			log_message debug "Pas de channel ou channel casse"
+			log_message debug "Verification du socket ~/.ssh/master-$remoteuser@$MACHINE_DEST:22"
+			if [ -S ~/.ssh/master-$remoteuser@$MACHINE_DEST:22 ]
+			then
+				log_message debug "Un socket existe, on l'efface"
+				rm ~/.ssh/master-$remoteuser@$MACHINE_DEST:22
+			fi
+			log_message debug "Ouverture d'un channel"
+			$remoteshell -Nf $remoteuser@$MACHINE_DEST
+		fi
+	fi
+
+        # rsync proprement dit :
+	if [ ${REVERSE} -eq 1 ]
+	then
+		log_message debug "Mode reverse active"
+	        COMMANDE="/usr/bin/rsync ${OPTIONS} -e '${remoteshell}' $DELETION_ARG $TEST_ARG $EXCLUDE_ARG $remoteuser@$MACHINE_DEST:$remotebase $localbase"
+	else
+	        COMMANDE="/usr/bin/rsync ${OPTIONS} -e '${remoteshell}' $DELETION_ARG $TEST_ARG $EXCLUDE_ARG $localbase $remoteuser@$MACHINE_DEST:$remotebase"
+	fi
+	log_message debug "Commande : $COMMANDE"
+        echo "${COMMANDE}" > ${REPERTOIRE_LOGS}/${MACHINE_DEST}.log
+
+
+	if [ $SEQ -eq 0 ]
+	then
+		eval "${COMMANDE} >> ${REPERTOIRE_LOGS}/${MACHINE_DEST}.log 2>${REPERTOIRE_LOGS}/${MACHINE_DEST}.err &" 
+		pids_list[$i]=$!
+		machines_list[$i]=${MACHINE_DEST}
+		i=$(($i+1))
+	else
+		eval "$COMMANDE >> ${REPERTOIRE_LOGS}/${MACHINE_DEST}.log 2>${REPERTOIRE_LOGS}/${MACHINE_DEST}.err"
+		if [ $? -eq 0 ]
+		then
+			echo $TAG_OK >> ${REPERTOIRE_LOGS}/${MACHINE_DEST}.log
+		else
+			echo $TAG_NOK >> $REPERTOIRE_LOGS/${MACHINE_DEST}.log
+			$machines_nok[$i]=${MACHINE_DEST}
+			i=$(($i+1))
+		fi
+		echo $TAG_FIN >> ${REPERTOIRE_LOGS}/${MACHINE_DEST}.log
+	fi
+
+done
+
+NB_TOTAL=$NB_MACHINES_DEST
+timedout=0
+
+if [ ${SEQ} -eq 0 ]
+then
+	# Si necessaire, on englobe la bloc suivant dans 1 TIMEOUT
+	if [ $timeout -ne 0 ]
+	then
+		log_message debug "Mise en place d'un timeout de $timeout secondes"
+		trap timedout=1 14
+		monpid=$$
+		(sleep $timeout ; kill -ALRM $monpid ) &>/dev/null &
+	fi
+
+	# Verifie que les rsync sont finis
+	NB_FINI=$NB_TOTAL
+	while [ $NB_FINI -ne 0 -a $timedout -ne 1 ]
+	do
+		NB_FINI=$(jobs -r | grep -v sleep | wc -l )
+		log_message debug "Progression : $(($NB_TOTAL-$NB_FINI))/$NB_TOTAL"
+		sleep 1;
+	done
+
+	# Annule TIMEOUT et ménage dans les sous shell:
+	trap "" 14
+	clean_jobs 9
+
+	j=0
+	# On recupere le code de retour des rsyncs
+	for ((i=0;i<$((${#pids_list[*]}));i++))
+	do
+		wait ${pids_list[$i]}
+		rsync_return_code=$?
+		echo "Return code : $rsync_return_code" >> ${REPERTOIRE_LOGS}/${machines_list[$i]}.log
+		if [ $rsync_return_code -eq 0 ]
+		then
+			echo $TAG_OK >> ${REPERTOIRE_LOGS}/${machines_list[$i]}.log
+		else
+			echo $TAG_NOK >> ${REPERTOIRE_LOGS}/${machines_list[$i]}.log
+			machines_nok[$j]=${machines_list[$i]}
+			j=$(($j+1))
+		fi
+		echo $TAG_FIN >> ${REPERTOIRE_LOGS}/${machines_list[$i]}.log
+	done
+fi
+
+# Affiche les logs de chaque machine
+for((j=0;j<${#MACHINES_DEST[*]};j++))
+do
+	MACHINE_DEST=${MACHINES_DEST[$j]}
+	log_message debug "<< $MACHINE_DEST =="
+	if [ `cat "${REPERTOIRE_LOGS}/${MACHINE_DEST}.err" | egrep -v '^file has vanished: ' | egrep -v 'rsync warning: some files vanished before they could be transferred (code 24)' | wc -l` -ne 0 ]
+	then
+		if [ ${BOURSO_DEBUG} -eq 1 ]
+		then
+			log_message debug "<<< ERR ==="
+			log_message_from_file debug ${REPERTOIRE_LOGS}/${MACHINE_DEST}.err
+			log_message debug "==== ERR >>>>"
+		else
+			log_message error "<< ${MACHINE_DEST} =="
+			log_message error "<<< ERR : $MACHINE_DEST ==="
+			log_message_from_file error ${REPERTOIRE_LOGS}/${MACHINE_DEST}.err
+			log_message error "==== ERR >>>>"
+			log_message error "== ${MACHINE_DEST} >>"
+		fi
+	fi
+	log_message debug "<<<< LOG ===="
+        log_message_from_file debug "${REPERTOIRE_LOGS}/${MACHINE_DEST}.log"
+       	log_message debug "==== LOG >>>>"
+       	log_message debug "== ${MACHINE_DEST} >>"
+done
+
+# Affiche bilan ( nom des machines si pas ok )
+
+NB_OK=`cat $REPERTOIRE_LOGS/*.log | grep "$TAG_OK" | wc -l`
+if [ ${NB_OK} -ne ${NB_TOTAL} -o ${timedout} -eq 1 ]
+then
+        if [ ${timedout} -eq 1 ]
+        then
+                log_message error "TIMEOUT ($(($NB_TOTAL-$NB_FINI))/$NB_TOTAL) "
+        fi
+
+        log_message error "SYNCHRO NOK : "
+	for ((i=0;i<$((${#machines_nok[*]}));i++))
+        do
+		log_message error ${machines_nok[$i]}
+        done
+	RETURN_CODE=${EXIT_ERROR}
+else
+        log_message info "SYNCHRO OK"
+	RETURN_CODE=${EXIT_OK}
+fi
+
+if [ "x${keeplog}" = "xno" ]
+then
+	if [ -d "${REPERTOIRE_LOGS}" -a "${REPERTOIRE_LOGS}" != "/" ]
+	then
+		rm -rf "${REPERTOIRE_LOGS}"
+	fi
+fi
+
+# --------------------------------------------------------------------------- #
+# Code de retour par defaut
+
+rm "${LOCKFILE}"
+exit ${RETURN_CODE}

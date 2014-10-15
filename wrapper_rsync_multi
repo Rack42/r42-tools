@@ -1,0 +1,176 @@
+#!/bin/bash
+# --------------------------------------------------------------------------- #
+#
+# @scriptname wrapper_rsync_multi.sh
+# @shortdescription Synchronise sequentiellement plusieurs configuration wrapper_rsync
+# @author Denis Sacchet <denis@rack42.fr>
+# @category system
+# @version 1.0
+# @link http://intranet/exploitwiki/
+# @safetorunatanytime yes
+#
+#
+# Changelog :
+#
+#   10 Jan 2012; Olivier Hanesse <olivier@rack42.fr>
+#   bugfix
+#
+#   04 Jan 2012; Olivier Hanesse <olivier@rack42.fr>
+#   bugfix
+#
+#   04 Jan 2012; Denis Sacchet <denis@rack42.fr>
+#   Version initiale
+#
+# --------------------------------------------------------------------------- #
+
+# --------------------------------------------------------------------------- #
+# Initialisation
+
+. /usr/local/lib/r42lib.inc.sh
+SCRIPT_NAME=$(basename $0)
+set_logsyslog "true"
+
+# --------------------------------------------------------------------------- #
+# Include de vos librairies et autres
+
+# --------------------------------------------------------------------------- #
+# Parametrage par defaut
+
+RETURN_CODE=${EXIT_OK}
+
+# --------------------------------------------------------------------------- #
+# Definition des fonctions
+
+function usage() {
+	echo "${SCRIPT_NAME} [ <OPTIONS> ]
+ -h / --help : affiche ce message et sort
+ -d / --debug : active le mode debug
+ -q / --quiet : active le mode silencieux
+ -c / --conf : fichier de configuration (/etc/wrapper_rsync/multi/<conf>)
+ -o / --options : specifie des options a passer a wrapper_rsync
+ -s / --stop-on-fail : on s'arrete des qu'une entree retourne une erreur"
+}
+
+function cb_trap() {
+	# Mettre ici ce qui faut pour faire le menage en cas de CTRL+C ...
+	exit ${EXIT_ALERT}
+}
+
+# --------------------------------------------------------------------------- #
+# Gestion de la ligne de commande
+
+TEMP=`getopt -o hdqc:o:s -l help,debug,quiet,conf:,options:,stop-on-fail -n '' -- "${@}"`
+
+if [ ${?} != 0 ] ; then log_message error "Probleme lors du traitement de la ligne de commande" ; exit 1 ; fi
+
+eval set -- "${TEMP}"
+
+CONF=
+OPTIONS=
+STOPONFAIL=0
+
+while true ; do
+	case "${1}" in
+		-d|--debug)
+			set_logdebug "true"
+			OPTIONS="$OPTIONS -d"
+			shift 1;
+			;;
+		-q|--quiet)
+			OPTIONS="$OPTIONS -q"
+			set_logquiet "true"
+			shift 1;
+			;;
+		-s|--stop-on-fail)
+			STOPONFAIL=1
+			shift 1;
+			;;
+		-h|--help)
+			usage
+			exit ${EXIT_OK}
+			;;
+		-o|--options)
+			OPTIONS="$OPTIONS ${2}"
+			shift 2
+			;;
+		-c|--conf)
+			CONF=${2}
+			shift 2
+			;;
+		--)
+			shift;
+			break;
+			;;
+		*)
+			log_message error "Erreur : ${1} est un paramètre non valide" 1>&2
+			usage 1>&2
+			exit ${EXIT_ERROR}
+			;;
+	esac;
+done;
+
+# --------------------------------------------------------------------------- #
+# Verification des paramatres (syntaxe, parametres obligatoires, etc ...)
+
+if [ x"${CONF}" = "x" ]
+then
+	log_message error "Erreur : c / conf est un paramètre obligatoire"
+	usage 1>&2
+	exit ${EXIT_ERROR}
+fi
+
+# --------------------------------------------------------------------------- #
+# Script en lui meme
+
+trap "{ cb_trap; }" 2 9 15
+
+# --------------------------------------------------------------------------- #
+# Vérification des paramètres et de la configuration
+
+conf="/etc/wrapper_rsync/multi/$CONF"
+
+if [ ! -f "${conf}" ]
+then
+	log_message error "Erreur : configuration file '${conf}' doesn't exist" 
+	exit ${EXIT_ERROR}
+fi
+
+IFS=$'\n'
+line_nb=0
+
+for line in $(cat $conf)
+do
+	line_nb=$(($line_nb + 1))
+	if [[ "$line" =~ ^\s*$  ]] || [[ "$line" =~ ^#.*$ ]]
+	then
+		log_message debug "Ligne $line_nb vide ou commentaire, on passe"
+		continue
+	fi
+	log_message debug "Ligne $line_nb : wrapper_rsync configuration file $line"
+	if [ ! -d /etc/wrapper_rsync/$line ]
+	then
+		log_message error "La configuration wrapper_rsync '$line' n'existe pas"
+		RETURN_CODE=${EXIT_WARNING}
+		continue
+	fi
+	log_message debug "On lance wrapper_rsync avec la configuration '$line'"
+	
+	eval "wrapper_rsync.sh $OPTIONS -c $line"
+	
+	WR_RETURN_CODE=$?
+	if [ $WR_RETURN_CODE -gt $RETURN_CODE ]
+	then
+		RETURN_CODE=$WR_RETURN_CODE
+	fi
+	if [ $WR_RETURN_CODE -ne 0 ]
+	then
+		log_message error "Probleme lors du wrapper_rsync de la configuration '$line'"
+		if [ $STOPONFAIL -eq 1 ]
+		then
+			log_message error "On stoppe la boucle en raison de l'option -s/--stop-on-fail"
+			break;
+		fi
+	fi
+done
+
+exit $RETURN_CODE
