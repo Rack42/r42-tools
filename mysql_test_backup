@@ -1,0 +1,115 @@
+#!/usr/bin/python
+
+import argparse
+import ConfigParser
+import os
+import logging
+import re
+
+__version__ = "$Revision: $"
+# $Source$
+
+### Parametrage
+
+DEFAULT_CONFIG_FILE='/etc/mysql/backup.cnf'
+
+config_definition={
+    '^mysql$':{
+        'host':{'type':'string','cmdline':'host'},
+        'user':{'type':'string','cmdline':'user'},
+        'password':{'type':'string','cmdline':'password'},
+        'socket':{'type':'socket_file','cmdline':'socket'},
+    },
+    '^backup$':{
+        'destdir':{'type':'directory','cmdline':'destdir'},
+        'dumpstructure':{'type':'boolean','cmdline':'dumpstructure'},
+    },
+    '^db-.*$':{
+        'include':{'type':'list','cmdline':'false'},
+        'exclude':{'type':'list','cmdline':'false'},
+    }
+}
+
+def config_file(config_file):
+    """Try to read a configuration file passed as argument. If ok, return
+    the resulting object, else raise the appropriate error"""
+    if not ( os.path.isfile(config_file) and os.access(config_file, os.R_OK) ):
+        msg = "Configuration file %r doesn't exist or is not readable" % config_file
+        raise argparse.ArgumentTypeError(msg)
+    config = ConfigParser.ConfigParser();
+    try:
+        config.read(config_file);
+    except ConfigParser.ParsingError:
+        msg = "Configuration file %r contains syntax error" % config_file
+        raise argparse.ArgumentTypeError(msg)
+    return config
+
+def socket_file(socket_file):
+    """Validate the argument is an existing socket file"""
+    return True
+
+def build_config(args,config_definition):
+    """take config definition, read config file, and use argments passed
+    on command line to build the validated resulting config structure """
+    built_config={}
+    # Configuration du fichier
+    config=args.config
+    # On boucle sur les sections ([...])
+    for section in config.sections():
+        # Pour l'instant on n'a rien trouve
+        found_section=False
+        # La liste des sections autorisees est dans config_definition
+        for allowed_section_re in config_definition:
+            # Si on match l'expression reguliere, bingo, on marque
+            # qu'on a trouve, puis on valide les options de cette
+            # section
+            if not re.match(allowed_section_re,section) == None:
+                found_section=True
+                section_definition=config_definition[allowed_section_re]
+                found_item=False
+                # On boucle sur les items de la section
+                for item,val in config.items(section):
+                    # La liste des sections autorisees est dans
+                    # section_definition
+                    for allowed_options in section_definition:
+                        if item == allowed_options:
+                            found_item=True
+                            item_definition=section_definition[allowed_options]
+                            # si l'option est passee sur la ligne de commande, on
+                            # utilise cette valeur
+                            if not built_config.has_key(section):
+                                built_config[section]={}
+                            if hasattr(args,item_definition['cmdline']):
+                                built_config[section][item]=config.item
+                            else:
+                                built_config[section][item]=val
+                    if found_item == False:
+                        raise SyntaxError('Item ' + item + ' is not authorized in section ' + section)
+        if found_section == False:
+            raise SyntaxError('Section ' + section + ' is not an autorized section in this configuration file')
+
+    print str(built_config)
+
+parser = argparse.ArgumentParser(description='Backup mysql databases.');
+parser.add_argument('-d','--debug',action='store_true',help='Display debug messages',default=argparse.SUPPRESS)
+parser.add_argument('-q','--quiet',action='store_true',help='Suppress informational messages',default=argparse.SUPPRESS)
+parser.add_argument('-c','--config',action='store', help='Specify the configuration file (default : '+DEFAULT_CONFIG_FILE+')',type=config_file,default=argparse.SUPPRESS)
+parser.add_argument('-H','--host',action='store', help='Specify the mysql host (mutually exclusive with socket)',default=argparse.SUPPRESS)
+parser.add_argument('-u','--user',action='store', help='Specify the mysql username',default=argparse.SUPPRESS)
+parser.add_argument('-p','--password',action='store', help='Specify the mysql password',default=argparse.SUPPRESS)
+parser.add_argument('-s','--socket',action='store', help='Specify the mysql socket (mutually exclusive with host)',type=socket_file,default=argparse.SUPPRESS)
+parser.add_argument('-P','--port',action='store', help='Specify the mysql tcp port (only with host)',type=int,default=argparse.SUPPRESS)
+parser.add_argument('-D','--destdir',action='store', help='Destination directory for dump',default=argparse.SUPPRESS)
+parser.add_argument('-S','--dumpstructure',action='store_true',help='Dump all tables structures',default=argparse.SUPPRESS)
+
+args = parser.parse_args()
+
+if not hasattr(args,'config'):
+    try:
+        args.config=config_file(DEFAULT_CONFIG_FILE)
+    except argparse.ArgumentTypeError as e:
+        print e
+        os.sys.exit(1)
+
+build_config(args,config_definition)
+
